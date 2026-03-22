@@ -20,4 +20,4 @@ Follow the directions in data/download_instructions.md
 ## Notebook Breakdown
 All notebooks can be found in the /notebooks subdirectory. Here is a breakdown of each one:
 - `data_exploration.ipynb` --> Analyzes the raw data, prints statistics on T1/FLAIR shaping/sizes by testing site, checks what pre-processing is necessary
-- `verify_processed.ipynb` --> Verify the outputs of running `preprocessing/preprocess.py`. Check shapes/sizes match, images align, and no cases of zero WMH voxels
+- `verify_processed.ipynb` --> Verify the outputs of running `preprocessing/preprocess_rawData.py`. Check shapes/sizes match, images align, and no cases of zero WMH voxels
