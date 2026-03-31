@@ -16,6 +16,13 @@ Notes:
 ## Data Setup
 Follow the directions in data/download_instructions.md
 
+## Preprocessing Steps
+
+1. Run the following to apply resampling, cropping, binarizing, and normaling fixes to the raw data (Basically, the issues we found in `data_exploration.ipynb`) 
+`python preprocess_rawData.py --split training --split test  --verify`
+
+2. Run the following to actually compute the classical segmentation results (for comparison) and the soft maps that will be fed into the U-Net:
+`python preprocessing/compute_soft_maps.py --split training --split test`
 
 ## Notebook Breakdown
 All notebooks can be found in the /notebooks subdirectory. Here is a breakdown of each one:

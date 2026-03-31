@@ -9,10 +9,10 @@ Steps per case:
   5. Save to data/processed/{training|test}/{site}/{patient_id}/
 
 Usage:
-  python preprocess.py                                              # process training set
-  python preprocess.py --split test                                 # process test set
-  python preprocess.py --split training --split test                # process both
-  python preprocess.py --split training --split test  --verify      # verify flag prints shapes/spacing/mask for 5 samples as sanity check
+  python preprocess_rawData.py                                              # process training set
+  python preprocess_rawData.py --split test                                 # process test set
+  python preprocess_rawData.py --split training --split test                # process both
+  python preprocess_rawData.py --split training --split test  --verify      # verify flag prints shapes/spacing/mask for 5 samples as sanity check
 """
 
 import os
