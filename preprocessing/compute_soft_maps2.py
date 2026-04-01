@@ -21,18 +21,20 @@ Pipeline (per patient):
             Reference: Ghafoorian et al. 2017 (use of brain mask to restrict
             WMH candidate region)
 
-  Step 2 — Otsu threshold on per-patient FLAIR-T1 difference map
+  Step 2 — Percentile threshold on per-patient FLAIR-T1 difference map
             Both FLAIR and T1 are z-scored (mean=0, std=1 on brain voxels).
             WMH appear bright on FLAIR but only moderately bright on T1, so
             (FLAIR - T1) is strongly positive for WMH and near zero or negative
             for normal WM (bright on both) and CSF (dark on both).
-            Otsu thresholding is applied to the diff map within the brain mask,
-            automatically finding the per-patient optimal split between the
-            background peak and the WMH tail of the distribution. This avoids
-            the need for a fixed global threshold, which fails when per-subject
-            z-scoring shifts intensities depending on WMH burden.
-            A secondary FLAIR gate (FLAIR >= FLAIR_MIN_THRESHOLD) further
-            excludes CSF partial-volume voxels with suppressed (negative) FLAIR.
+            Because WMH occupies only a tiny fraction of brain voxels, we use
+            a per-patient percentile threshold on the diff map within the brain
+            mask rather than Otsu. This selects only the top tail of diff
+            values (e.g. top 3% if using the 97th percentile), which is more
+            appropriate for highly imbalanced lesion distributions.
+            A secondary absolute diff floor further prevents marking normal
+            tissue when WMH burden is very low. A secondary FLAIR gate
+            (FLAIR >= FLAIR_MIN_THRESHOLD) further excludes CSF partial-volume
+            voxels with suppressed (negative) FLAIR.
             References: Schmidt et al. 2012 (LST lesion growth algorithm uses
             T1 tissue segmentation + FLAIR); Griffanti et al. 2016 (BIANCA:
             T1+FLAIR multimodal input outperforms FLAIR-only).
@@ -65,21 +67,28 @@ from pathlib import Path
 
 # ── Parameters ────────────────────────────────────────────────────────────────
 
-# Secondary gate applied after Otsu: FLAIR must also be above this z-score to
-# exclude CSF partial-volume voxels where FLAIR is suppressed (negative by design).
-# This is kept as a fixed value since CSF suppression is consistent across patients.
-FLAIR_MIN_THRESHOLD = 0.3
+# Secondary gate applied after diff threshold: FLAIR must also be above this
+# z-score to exclude CSF partial-volume voxels where FLAIR is suppressed.
+FLAIR_MIN_THRESHOLD = 0.5
+
+# Per-patient percentile threshold on the brain-masked diff map.
+# Example: 97.0 keeps only the top 3% of diff values as WMH candidates.
+DIFF_PERCENTILE = 96.0
+
+# Absolute floor on the diff map. Prevents the percentile rule from selecting
+# normal tissue when WMH burden is extremely low.
+DIFF_MIN_THRESHOLD = 0.3
 
 # Erosion radius (voxels) applied to the T1 brain mask before thresholding.
 # Removes the skull boundary, which is the main source of false positives.
 # 5 voxels at 1mm in-plane spacing removes ~5mm of outer brain boundary.
-BRAIN_EROSION_RADIUS = 5
+BRAIN_EROSION_RADIUS = 7
 
 # Morphological opening kernel radius (voxels).
 MORPH_RADIUS = 1
 
 # Minimum connected component size (voxels) to keep.
-MIN_LESION_VOXELS = 7
+MIN_LESION_VOXELS = 15
 
 # Gaussian smoothing sigma (voxels) for soft map generation.
 GAUSSIAN_SIGMA = 1.0
@@ -123,57 +132,21 @@ def build_eroded_brain_mask(t1_image, erosion_radius=BRAIN_EROSION_RADIUS):
     return erode_filter.Execute(brain_img)
 
 
-def _otsu_threshold_numpy(values):
+def percentile_diff_threshold(flair_image, t1_image, brain_mask_image,
+                              diff_percentile=DIFF_PERCENTILE,
+                              diff_min=DIFF_MIN_THRESHOLD,
+                              flair_min=FLAIR_MIN_THRESHOLD):
     """
-    Compute Otsu's threshold for a 1D array of float values.
+    Per-patient percentile threshold on the FLAIR-T1 difference map.
 
-    Finds the threshold that maximises between-class variance (equivalently,
-    minimises within-class variance). Implemented in pure numpy to avoid
-    SimpleITK physical-space alignment requirements.
+    Computes (FLAIR - T1) within the eroded brain mask, then selects candidate
+    voxels whose diff value is above a patient-specific percentile threshold
+    (e.g. 97th percentile = top 3% of brain voxels by diff value).
 
-    Returns:
-        float: Otsu threshold value
-    """
-    hist, bin_edges = np.histogram(values, bins=256)
-    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
-
-    total     = hist.sum()
-    sum_total = (hist * bin_centers).sum()
-
-    sum_bg, weight_bg = 0.0, 0.0
-    best_variance, threshold = 0.0, bin_centers[0]
-
-    for i in range(len(hist)):
-        weight_bg += hist[i]
-        if weight_bg == 0:
-            continue
-        weight_fg = total - weight_bg
-        if weight_fg == 0:
-            break
-        sum_bg   += hist[i] * bin_centers[i]
-        mean_bg   = sum_bg / weight_bg
-        mean_fg   = (sum_total - sum_bg) / weight_fg
-        variance  = weight_bg * weight_fg * (mean_bg - mean_fg) ** 2
-        if variance > best_variance:
-            best_variance = variance
-            threshold     = bin_centers[i]
-
-    return float(threshold)
-
-
-def otsu_diff_threshold(flair_image, t1_image, brain_mask_image,
-                        flair_min=FLAIR_MIN_THRESHOLD):
-    """
-    Per-patient Otsu threshold on the FLAIR-T1 difference map.
-
-    Computes (FLAIR - T1) within the brain mask, then uses Otsu's method to
-    automatically find the patient-specific threshold that best separates the
-    background tissue peak from the WMH tail of the distribution. This avoids
-    a fixed global threshold, which fails when per-subject z-scoring shifts
-    intensities based on individual WMH burden.
-
-    Otsu is computed in numpy to avoid SimpleITK physical-space alignment
-    requirements between the diff image and the brain mask.
+    Because WMH occupies only a tiny fraction of brain voxels, this is more
+    appropriate than Otsu for the highly imbalanced diff-value distribution.
+    An absolute floor on the diff map is also enforced to avoid selecting
+    normal tissue in cases with very low WMH burden.
 
     A secondary FLAIR gate (flair_arr >= flair_min) removes CSF partial-volume
     voxels whose FLAIR signal is suppressed regardless of the diff value.
@@ -182,11 +155,13 @@ def otsu_diff_threshold(flair_image, t1_image, brain_mask_image,
         flair_image      (sitk.Image): Z-scored FLAIR volume
         t1_image         (sitk.Image): Z-scored T1 volume
         brain_mask_image (sitk.Image): Eroded binary brain mask
-        flair_min        (float):      Minimum FLAIR z-score gate (default 0.3)
+        diff_percentile  (float):      Percentile on brain-masked diff values
+        diff_min         (float):      Absolute minimum diff threshold
+        flair_min        (float):      Minimum FLAIR z-score gate
 
     Returns:
         sitk.Image: Binary candidate WMH mask (1=candidate, 0=background)
-        float:      Per-patient Otsu threshold value (for logging)
+        float:      Effective per-patient diff threshold used for logging
 
     References: Schmidt et al. 2012 (LST); Griffanti et al. 2016 (BIANCA).
     """
@@ -196,9 +171,10 @@ def otsu_diff_threshold(flair_image, t1_image, brain_mask_image,
 
     diff_arr = flair_arr - t1_arr
 
-    # Compute Otsu threshold on brain-masked diff values only
+    # Compute percentile threshold on brain-masked diff values only
     brain_diff_vals = diff_arr[mask_arr]
-    threshold = _otsu_threshold_numpy(brain_diff_vals)
+    percentile_threshold = np.percentile(brain_diff_vals, diff_percentile)
+    threshold = max(float(percentile_threshold), float(diff_min))
 
     # Apply threshold + secondary FLAIR gate
     candidate_arr = np.zeros_like(flair_arr, dtype=np.uint8)
@@ -293,9 +269,15 @@ def compute_maps_for_case(case_dir):
     # Step 1 — Eroded brain mask from T1
     brain_mask = build_eroded_brain_mask(t1, erosion_radius=BRAIN_EROSION_RADIUS)
 
-    # Step 2 — Per-patient Otsu threshold on FLAIR-T1 difference map
-    binary, threshold = otsu_diff_threshold(flair, t1, brain_mask,
-                                            flair_min=FLAIR_MIN_THRESHOLD)
+    # Step 2 — Per-patient percentile threshold on FLAIR-T1 difference map
+    binary, threshold = percentile_diff_threshold(
+        flair,
+        t1,
+        brain_mask,
+        diff_percentile=DIFF_PERCENTILE,
+        diff_min=DIFF_MIN_THRESHOLD,
+        flair_min=FLAIR_MIN_THRESHOLD,
+    )
 
     # Step 3 — Morphological opening
     binary = morphological_opening(binary, radius=MORPH_RADIUS)
@@ -343,7 +325,9 @@ def discover_cases(split):
 def run_split(split):
     print(f'\n{"="*60}')
     print(f'Computing soft maps — {split} set')
-    print(f'Parameters: otsu_on_diff_map (per-patient), '
+    print(f'Parameters: percentile_on_diff_map (per-patient), '
+          f'diff_percentile={DIFF_PERCENTILE}, '
+          f'diff_min={DIFF_MIN_THRESHOLD}, '
           f'flair_min={FLAIR_MIN_THRESHOLD}, '
           f'brain_erosion={BRAIN_EROSION_RADIUS}px, '
           f'morph_radius={MORPH_RADIUS}, '
