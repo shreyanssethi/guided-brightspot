@@ -1,39 +1,62 @@
 """
+preprocessing/compute_soft_maps2.py
+
 Runs a classical SimpleITK pipeline on each preprocessed FLAIR volume to produce:
 
-  1. soft_map.nii   --> Soft probability map (values 0→1) used as guidance signal (injected into U-Net skip connections during training). Produced by Gaussian-smoothing the cleaned binary mask
+  1. soft_map.nii      -- Soft probability map (values 0→1) used as guidance
+                          signal injected into U-Net skip connections during training.
 
-  2. classical_seg.nii --> Hard binary segmentation from the classical pipeline alone (will have values 0 or 1). Used in ablation study to compare:
+  2. classical_seg.nii -- Hard binary segmentation from the classical pipeline alone
+                          (values 0 or 1). Used in ablation study to compare:
                           - Classical only (this file)
                           - U-Net only (baseline model output)
-                          - Hybrid U-Net (guided model output)
+                          - Guided U-Net (guided model output)
 
-Pipeline (This will run PER patient):
-  Step 1 — Otsu threshold on brain voxels of FLAIR
-            Automatically finds the optimal intensity cutoff separating bright/hyperintense tissue from normal brain.
+Pipeline (per patient):
+  Step 1 — Build eroded brain mask from T1
+            T1 non-zero voxels define the brain region. We erode this mask
+            inward by BRAIN_EROSION_RADIUS voxels to eliminate the skull
+            boundary, which is the primary source of false positives when
+            thresholding FLAIR.
+            Reference: Ghafoorian et al. 2017 (use of brain mask to restrict
+            WMH candidate region)
 
-  Step 2 — Morphological opening (erosion --> dilation)
-            Removes small isolated false positive detections ("speckle" noise) while preserving larger genuine WMH clusters.
+  Step 2 — Percentile threshold on per-patient FLAIR-T1 difference map
+            Both FLAIR and T1 are z-scored (mean=0, std=1 on brain voxels).
+            WMH appear bright on FLAIR but only moderately bright on T1, so
+            (FLAIR - T1) is strongly positive for WMH and near zero or negative
+            for normal WM (bright on both) and CSF (dark on both).
+            Because WMH occupies only a tiny fraction of brain voxels, we use
+            a per-patient percentile threshold on the diff map within the brain
+            mask rather than Otsu. This selects only the top tail of diff
+            values (e.g. top 3% if using the 97th percentile), which is more
+            appropriate for highly imbalanced lesion distributions.
+            A secondary absolute diff floor further prevents marking normal
+            tissue when WMH burden is very low. A secondary FLAIR gate
+            (FLAIR >= FLAIR_MIN_THRESHOLD) further excludes CSF partial-volume
+            voxels with suppressed (negative) FLAIR.
+            References: Schmidt et al. 2012 (LST lesion growth algorithm uses
+            T1 tissue segmentation + FLAIR); Griffanti et al. 2016 (BIANCA:
+            T1+FLAIR multimodal input outperforms FLAIR-only).
 
-  Step 3 — Connected component filtering
-            Removes any remaining connected component smaller than MIN_LESION_VOXELS. Filters CSF-adjacent false positives that make it through morphological cleanup.
+  Step 3 — Morphological opening
+            Removes small isolated detections while preserving genuine WMH.
+            Reference: Gonzalez-Villà et al. 2016
 
-  Step 4 — Save classical_seg.nii (binary mask at this point, for ablation studies)
+  Step 4 — Connected component filtering
+            Removes components smaller than MIN_LESION_VOXELS.
+            Reference: Caligiuri et al. 2015
 
-  Step 5 — Gaussian smoothing of binary mask to get soft_map.nii
-            Converts the hard binary mask into soft probabilities.
-            Voxels near lesion centers get values close to 1,
-            boundary voxels get intermediate values, background near 0.
-            This is part of the novel design choice for the hybrid approach I'm trying
+  Step 5 — Save classical_seg.nii (binary mask at this point)
 
-Some of the papers I looked at to motivate this pipeline:
-Caligiuri et al. 2015, Neuroinformatics --> https://link.springer.com/article/10.1007/s12021-015-9260-y
-Gonzalez-Villà et al. 2016 --> https://www.frontiersin.org/journals/neuroinformatics/articles/10.3389/fninf.2016.00033/full
+  Step 6 — Gaussian smoothing → soft_map.nii
+            Our novel design choice: converts hard binary mask to soft
+            probabilities for injection into U-Net skip connections.
 
 Usage:
-  python preprocessing/compute_soft_maps.py                  # training set
-  python preprocessing/compute_soft_maps.py --split test     # test set
-  python preprocessing/compute_soft_maps.py --split training --split test
+  python preprocessing/compute_soft_maps2.py                  # training set
+  python preprocessing/compute_soft_maps2.py --split test     # test set
+  python preprocessing/compute_soft_maps2.py --split training --split test
 """
 
 import argparse
@@ -42,24 +65,36 @@ import SimpleITK as sitk
 from pathlib import Path
 
 
-# {── Parameters ────────────────────────────────────────────────────────────}
+# ── Parameters ────────────────────────────────────────────────────────────────
 
-# Morphological opening kernel radius (in voxels)
-# Radius of 1 removes isolated single-voxel detections
+# Secondary gate applied after diff threshold: FLAIR must also be above this
+# z-score to exclude CSF partial-volume voxels where FLAIR is suppressed.
+FLAIR_MIN_THRESHOLD = 0.5
+
+# Per-patient percentile threshold on the brain-masked diff map.
+# Example: 97.0 keeps only the top 3% of diff values as WMH candidates.
+DIFF_PERCENTILE = 96.0
+
+# Absolute floor on the diff map. Prevents the percentile rule from selecting
+# normal tissue when WMH burden is extremely low.
+DIFF_MIN_THRESHOLD = 0.3
+
+# Erosion radius (voxels) applied to the T1 brain mask before thresholding.
+# Removes the skull boundary, which is the main source of false positives.
+# 5 voxels at 1mm in-plane spacing removes ~5mm of outer brain boundary.
+BRAIN_EROSION_RADIUS = 7
+
+# Morphological opening kernel radius (voxels).
 MORPH_RADIUS = 1
 
-# Minimum connected component size (voxels) to keep
-# Components smaller than this are treated as false positives
-# 3mm slice thickness × ~1mm in-plane --> 3 voxels ≈ ~3mm³ minimum lesion
-MIN_LESION_VOXELS = 3
+# Minimum connected component size (voxels) to keep.
+MIN_LESION_VOXELS = 15
 
-# Gaussian smoothing sigma (in voxels) for soft map generation
-# Higher sigma = smoother/wider soft probabilities around each lesion
-# 1.0 is a conservative starting choice that keeps the map tightly around lesions
+# Gaussian smoothing sigma (voxels) for soft map generation.
 GAUSSIAN_SIGMA = 1.0
 
+# ── Paths ─────────────────────────────────────────────────────────────────────
 
-# {── Paths (Replace with yours) ────────────────────────────────────────────────────────────}
 PROCESSED_ROOT = Path('/data/users/ssethi2/mmml_repos/guided-brightspot/data/processed')
 
 SITES = {
@@ -69,44 +104,95 @@ SITES = {
 }
 
 
-#{ ── Pipeline steps ────────────────────────────────────────────────────────────}
+# ── Pipeline steps ────────────────────────────────────────────────────────────
 
-def otsu_threshold(flair_image):
+def build_eroded_brain_mask(t1_image, erosion_radius=BRAIN_EROSION_RADIUS):
     """
-    Apply Otsu thresholding to brain voxels of the FLAIR image (Should find the intensity threshold to minimize intra-class variance)
-    Applied only to brain voxels (intensity > 0) so the background does not skew the threshold estimate.
-    Returns a binary SimpleITK image (1 = candidate WMH, 0 = background).
+    Build a brain mask from the T1 image and erode it inward.
+
+    T1 non-zero voxels define the brain region. Erosion removes the outermost
+    voxels of the brain boundary, eliminating the skull rim which is
+    consistently the main source of false positives when thresholding FLAIR.
+
+    Args:
+        t1_image       (sitk.Image): Preprocessed T1 volume (z-scored)
+        erosion_radius (int):        Erosion radius in voxels
+
+    Returns:
+        sitk.Image: Binary brain mask (1=brain interior, 0=outside/boundary)
     """
-    arr = sitk.GetArrayFromImage(flair_image)
+    t1_arr    = sitk.GetArrayFromImage(t1_image)
+    brain_arr = (t1_arr != 0).astype(np.uint8)
+    brain_img = sitk.GetImageFromArray(brain_arr)
+    brain_img.CopyInformation(t1_image)
 
-    # Mask (non-zero voxels) to restrict Otsu to brain tissue
-    brain_mask = (arr > 0).astype(np.uint8)
-    brain_mask_img = sitk.GetImageFromArray(brain_mask)
-    brain_mask_img.CopyInformation(flair_image)
+    erode_filter = sitk.BinaryErodeImageFilter()
+    erode_filter.SetKernelRadius(erosion_radius)
+    erode_filter.SetForegroundValue(1)
+    return erode_filter.Execute(brain_img)
 
-    # Run Otsu: insideValue=1 means voxels ABOVE threshold are foreground
-    otsu_filter = sitk.OtsuThresholdImageFilter()
-    otsu_filter.SetInsideValue(0)
-    otsu_filter.SetOutsideValue(1)
-    otsu_filter.SetMaskValue(1)
-    binary = otsu_filter.Execute(flair_image, brain_mask_img)
 
-    # Ensure background (arr == 0) stays 0 regardless of threshold
-    binary_arr = sitk.GetArrayFromImage(binary)
-    binary_arr[arr <= 0] = 0
-    out = sitk.GetImageFromArray(binary_arr.astype(np.uint8))
+def percentile_diff_threshold(flair_image, t1_image, brain_mask_image,
+                              diff_percentile=DIFF_PERCENTILE,
+                              diff_min=DIFF_MIN_THRESHOLD,
+                              flair_min=FLAIR_MIN_THRESHOLD):
+    """
+    Per-patient percentile threshold on the FLAIR-T1 difference map.
+
+    Computes (FLAIR - T1) within the eroded brain mask, then selects candidate
+    voxels whose diff value is above a patient-specific percentile threshold
+    (e.g. 97th percentile = top 3% of brain voxels by diff value).
+
+    Because WMH occupies only a tiny fraction of brain voxels, this is more
+    appropriate than Otsu for the highly imbalanced diff-value distribution.
+    An absolute floor on the diff map is also enforced to avoid selecting
+    normal tissue in cases with very low WMH burden.
+
+    A secondary FLAIR gate (flair_arr >= flair_min) removes CSF partial-volume
+    voxels whose FLAIR signal is suppressed regardless of the diff value.
+
+    Args:
+        flair_image      (sitk.Image): Z-scored FLAIR volume
+        t1_image         (sitk.Image): Z-scored T1 volume
+        brain_mask_image (sitk.Image): Eroded binary brain mask
+        diff_percentile  (float):      Percentile on brain-masked diff values
+        diff_min         (float):      Absolute minimum diff threshold
+        flair_min        (float):      Minimum FLAIR z-score gate
+
+    Returns:
+        sitk.Image: Binary candidate WMH mask (1=candidate, 0=background)
+        float:      Effective per-patient diff threshold used for logging
+
+    References: Schmidt et al. 2012 (LST); Griffanti et al. 2016 (BIANCA).
+    """
+    flair_arr = sitk.GetArrayFromImage(flair_image)
+    t1_arr    = sitk.GetArrayFromImage(t1_image)
+    mask_arr  = sitk.GetArrayFromImage(brain_mask_image).astype(bool)
+
+    diff_arr = flair_arr - t1_arr
+
+    # Compute percentile threshold on brain-masked diff values only
+    brain_diff_vals = diff_arr[mask_arr]
+    percentile_threshold = np.percentile(brain_diff_vals, diff_percentile)
+    threshold = max(float(percentile_threshold), float(diff_min))
+
+    # Apply threshold + secondary FLAIR gate
+    candidate_arr = np.zeros_like(flair_arr, dtype=np.uint8)
+    candidate_arr[(diff_arr >= threshold) & (flair_arr >= flair_min) & mask_arr] = 1
+
+    out = sitk.GetImageFromArray(candidate_arr)
     out.CopyInformation(flair_image)
-
-    return out, otsu_filter.GetThreshold()
+    return out, threshold
 
 
 def morphological_opening(binary_image, radius=MORPH_RADIUS):
     """
-    Apply morphological opening (erosion followed by dilation) to a binary image.
+    Apply morphological opening (erosion then dilation) to a binary image.
 
-    Opening removes small isolated detections (radius < kernel) while
-    preserving larger connected structures. This cleans up single-voxel
-    false positives common near CSF boundaries after thresholding.
+    Removes small isolated detections smaller than the kernel radius while
+    preserving larger connected WMH structures.
+
+    Reference: Gonzalez-Villà et al. 2016
     """
     opening_filter = sitk.BinaryMorphologicalOpeningImageFilter()
     opening_filter.SetKernelRadius(radius)
@@ -118,31 +204,26 @@ def remove_small_components(binary_image, min_voxels=MIN_LESION_VOXELS):
     """
     Remove connected components smaller than min_voxels.
 
-    After thresholding and morphological opening, small isolated clusters
-    remain — often near CSF or vessel boundaries. Connected component
-    analysis labels each cluster; we discard those below the size threshold.
+    Reference: Caligiuri et al. 2015, Neuroinformatics.
 
-    Returns cleaned binary image and count of removed components.
+    Returns:
+        cleaned binary image, n_removed, n_total_components
     """
-    # Label connected components
     cc_filter = sitk.ConnectedComponentImageFilter()
-    cc_filter.SetFullyConnected(False)  # 6-connectivity (face neighbours only)
-    labeled = cc_filter.Execute(binary_image)
+    cc_filter.SetFullyConnected(False)
+    labeled      = cc_filter.Execute(binary_image)
     n_components = cc_filter.GetObjectCount()
 
-    # Get sizes of each component
     stats = sitk.LabelShapeStatisticsImageFilter()
     stats.Execute(labeled)
 
-    # Build mask of components to keep
     labeled_arr = sitk.GetArrayFromImage(labeled)
     keep_mask   = np.zeros_like(labeled_arr, dtype=np.uint8)
     removed = 0
 
-    for label in range(1, n_components + 1):
-        size = stats.GetNumberOfPixels(label)
-        if size >= min_voxels:
-            keep_mask[labeled_arr == label] = 1
+    for label_id in range(1, n_components + 1):
+        if stats.GetNumberOfPixels(label_id) >= min_voxels:
+            keep_mask[labeled_arr == label_id] = 1
         else:
             removed += 1
 
@@ -155,30 +236,18 @@ def gaussian_smooth_to_soft_map(binary_image, sigma=GAUSSIAN_SIGMA):
     """
     Smooth a binary mask with a Gaussian filter to produce a soft probability map.
 
-    This converts the hard 0/1 classical segmentation into a continuous
-    probability-like map where:
-      - Voxels at lesion centers → values close to 1
-      - Voxels at lesion boundaries → intermediate values (0.3–0.7)
-      - Background far from lesions → values close to 0
+    Converts hard 0/1 classical segmentation into continuous probability-like
+    values for injection into U-Net skip connections.
 
-    This soft map is injected into U-Net skip connections as a spatial
-    attention signal. Using soft values rather than hard binary allows the
-    network to learn to partially trust uncertain boundary regions.
-
-    Note: This step is our novel design choice and not directly taken
-    from the WMH literature.
+    Note: This step is our novel design choice, not from the WMH literature.
     """
-    # Cast to float first for Gaussian
     float_img = sitk.Cast(binary_image, sitk.sitkFloat32)
     smoothed  = sitk.SmoothingRecursiveGaussian(float_img, sigma=sigma)
 
-    # Clip to [0, 1] — Gaussian can produce tiny negative values at boundaries
     clamp_filter = sitk.ClampImageFilter()
     clamp_filter.SetLowerBound(0.0)
     clamp_filter.SetUpperBound(1.0)
-    soft_map = clamp_filter.Execute(smoothed)
-
-    return soft_map
+    return clamp_filter.Execute(smoothed)
 
 
 # ── Per-case pipeline ─────────────────────────────────────────────────────────
@@ -188,52 +257,57 @@ def compute_maps_for_case(case_dir):
     Run the full classical pipeline for one patient case.
 
     Reads:   {case_dir}/FLAIR.nii
-    Writes:  {case_dir}/classical_seg.nii  (hard binary segmentation)
-             {case_dir}/soft_map.nii       (soft probability map for U-Net)
+             {case_dir}/T1.nii
+    Writes:  {case_dir}/classical_seg.nii
+             {case_dir}/soft_map.nii
 
     Returns a dict of statistics for logging.
     """
-    flair_path        = case_dir / 'FLAIR.nii'
-    classical_seg_out = case_dir / 'classical_seg.nii'
-    soft_map_out      = case_dir / 'soft_map.nii'
+    flair = sitk.ReadImage(str(case_dir / 'FLAIR.nii'), sitk.sitkFloat32)
+    t1    = sitk.ReadImage(str(case_dir / 'T1.nii'),    sitk.sitkFloat32)
 
-    flair = sitk.ReadImage(str(flair_path), sitk.sitkFloat32)
+    # Step 1 — Eroded brain mask from T1
+    brain_mask = build_eroded_brain_mask(t1, erosion_radius=BRAIN_EROSION_RADIUS)
 
-    # Step 1 —-> Otsu threshold
-    binary, threshold = otsu_threshold(flair)
+    # Step 2 — Per-patient percentile threshold on FLAIR-T1 difference map
+    binary, threshold = percentile_diff_threshold(
+        flair,
+        t1,
+        brain_mask,
+        diff_percentile=DIFF_PERCENTILE,
+        diff_min=DIFF_MIN_THRESHOLD,
+        flair_min=FLAIR_MIN_THRESHOLD,
+    )
 
-    # Step 2 —-> Morphological opening
+    # Step 3 — Morphological opening
     binary = morphological_opening(binary, radius=MORPH_RADIUS)
 
-    # Step 3 —-> Remove small connected components
+    # Step 4 — Remove small components
     binary, n_removed, n_total = remove_small_components(binary, min_voxels=MIN_LESION_VOXELS)
 
-    # Step 4 —-> Save hard binary segmentation (classical_seg)
-    sitk.WriteImage(sitk.Cast(binary, sitk.sitkUInt8), str(classical_seg_out))
+    # Step 5 — Save hard binary segmentation
+    sitk.WriteImage(sitk.Cast(binary, sitk.sitkUInt8),
+                    str(case_dir / 'classical_seg.nii'))
 
-    # Step 5 —-> Gaussian smooth for soft map
+    # Step 6 — Gaussian smooth → soft map
     soft_map = gaussian_smooth_to_soft_map(binary, sigma=GAUSSIAN_SIGMA)
-    sitk.WriteImage(soft_map, str(soft_map_out))
+    sitk.WriteImage(soft_map, str(case_dir / 'soft_map.nii'))
 
-    # Collect stats for logging
-    binary_arr   = sitk.GetArrayFromImage(binary)
-    soft_arr     = sitk.GetArrayFromImage(soft_map)
-    lesion_vox   = int(binary_arr.sum())
-    soft_max     = float(soft_arr.max())
+    binary_arr = sitk.GetArrayFromImage(binary)
+    soft_arr   = sitk.GetArrayFromImage(soft_map)
 
     return {
-        'threshold':   round(threshold, 3),
+        'threshold':           round(float(threshold), 3),
         'n_components_before': n_total,
-        'n_removed':   n_removed,
-        'lesion_voxels': lesion_vox,
-        'soft_map_max':  round(soft_max, 4),
+        'n_removed':           n_removed,
+        'lesion_voxels':       int(binary_arr.sum()),
+        'soft_map_max':        round(float(soft_arr.max()), 4),
     }
 
 
-# ── Runner ──────────────────────────────────────────────────────
+# ── Discovery and runner ──────────────────────────────────────────────────────
 
 def discover_cases(split):
-    """Return sorted list of processed case directories for a split."""
     split_dir = PROCESSED_ROOT / split
     cases = []
     for site in SITES[split]:
@@ -242,7 +316,8 @@ def discover_cases(split):
             print(f'  WARNING: {site_dir} not found, skipping')
             continue
         for patient_dir in sorted(site_dir.iterdir(), key=lambda x: x.name):
-            if (patient_dir / 'FLAIR.nii').exists():
+            if (patient_dir / 'FLAIR.nii').exists() and \
+               (patient_dir / 'T1.nii').exists():
                 cases.append(patient_dir)
     return cases
 
@@ -250,7 +325,12 @@ def discover_cases(split):
 def run_split(split):
     print(f'\n{"="*60}')
     print(f'Computing soft maps — {split} set')
-    print(f'Parameters: morph_radius={MORPH_RADIUS}, '
+    print(f'Parameters: percentile_on_diff_map (per-patient), '
+          f'diff_percentile={DIFF_PERCENTILE}, '
+          f'diff_min={DIFF_MIN_THRESHOLD}, '
+          f'flair_min={FLAIR_MIN_THRESHOLD}, '
+          f'brain_erosion={BRAIN_EROSION_RADIUS}px, '
+          f'morph_radius={MORPH_RADIUS}, '
           f'min_lesion_voxels={MIN_LESION_VOXELS}, '
           f'gaussian_sigma={GAUSSIAN_SIGMA}')
     print(f'{"="*60}\n')
@@ -263,12 +343,6 @@ def run_split(split):
     print('-' * 100)
 
     for i, case_dir in enumerate(cases):
-        # Skip if already computed
-        if (case_dir / 'soft_map.nii').exists() and \
-           (case_dir / 'classical_seg.nii').exists():
-            print(f'{i+1:<5} {str(case_dir.parent.name+"/"+case_dir.name):<35} SKIP (already computed)')
-            continue
-
         label = f'{case_dir.parent.name}/{case_dir.name}'
         try:
             stats = compute_maps_for_case(case_dir)
@@ -284,7 +358,7 @@ def run_split(split):
     print(f'\nDone. Outputs written to {PROCESSED_ROOT / split}')
 
 
-# ── Main ───────────────────────────────────────────────────────────────
+# ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(

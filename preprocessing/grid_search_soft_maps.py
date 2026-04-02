@@ -26,8 +26,8 @@ def load_module_from_path(module_name: str, file_path: Path):
 
 
 compute_soft_maps = load_module_from_path(
-    'compute_soft_maps2_module',
-    REPO_ROOT / 'preprocessing' / 'compute_soft_maps2.py',
+    'compute_soft_maps_module',
+    REPO_ROOT / 'preprocessing' / 'compute_soft_maps.py',
 )
 
 
@@ -132,7 +132,7 @@ def get_completed_param_keys(summary_rows):
 def evaluate_current_outputs(combo_pbar=None):
     """
     Evaluate current classical_seg.nii outputs already written into the
-    normal processed/training folders by compute_soft_maps2.run_split(...).
+    normal processed/training folders by compute_soft_maps.run_split(...).
     """
     per_case_rows = []
 
