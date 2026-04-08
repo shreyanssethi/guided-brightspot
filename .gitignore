@@ -1,2 +1,6 @@
 data/wmh_data/
 data/processed/
+homework/
+__pycache__/
+.vscode/
+outputs/

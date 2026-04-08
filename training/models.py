@@ -56,7 +56,7 @@ SPATIAL_DIMS  = 3
 IN_CHANNELS   = 2        # FLAIR + T1
 OUT_CHANNELS  = 2        # background + WMH
 CHANNELS      = (16, 32, 64, 128, 256)
-GUIDED_CHANNELS = (11, 22, 44, 88, 176)     # Guided uses smaller channels to match baseline param count (~4.8M)
+GUIDED_CHANNELS = (9, 18, 36, 72, 144)     # Guided uses smaller channels to match baseline param count (~4.8M)
 STRIDES       = (2, 2, 2, 2)
 NUM_RES_UNITS = 2
 NORM          = Norm.BATCH
@@ -187,8 +187,9 @@ class GuidedUNet(nn.Module):
     """
     Classically-guided 3D U-Net for WMH segmentation.
 
-    Encoder/decoder depth and channel widths are identical to BaselineUNet.
-    The key difference is the soft map injection at each skip connection.
+    Uses GUIDED_CHANNELS (smaller than CHANNELS) to match BaselineUNet's
+    parameter count (~4.8M) for a fair ablation comparison. The guidance
+    mechanism itself adds zero learnable parameters.
 
     Forward signature differs from BaselineUNet:
         x        (B, 2, H, W, D) — cat([flair, t1], dim=1)
@@ -196,22 +197,28 @@ class GuidedUNet(nn.Module):
         → logits (B, 2, H, W, D)
 
     Encoder structure (separates conv from downsampling):
-        conv0 → skip0 (B, 16, H,    W,    D   )
+        conv0 → skip0 (B, GC[0], H,    W,    D   )
         ↓ down0
-        conv1 → skip1 (B, 32, H/2,  W/2,  D/2 )
+        conv1 → skip1 (B, GC[1], H/2,  W/2,  D/2 )
         ↓ down1
-        conv2 → skip2 (B, 64, H/4,  W/4,  D/4 )
+        conv2 → skip2 (B, GC[2], H/4,  W/4,  D/4 )
         ↓ down2
-        conv3 → skip3 (B, 128,H/8,  W/8,  D/8 )
+        conv3 → skip3 (B, GC[3], H/8,  W/8,  D/8 )
         ↓ down3
-        bottleneck    (B, 256,H/16, W/16, D/16)
+        bottleneck    (B, GC[4], H/16, W/16, D/16)
 
     Decoder (each step upsamples and injects guided skip):
-        dec3: B,256,H/16 → upsample → B,256,H/8  + guided(skip3) → B,128,H/8
-        dec2: B,128,H/8  → upsample → B,128,H/4  + guided(skip2) → B,64, H/4
-        dec1: B,64, H/4  → upsample → B,64, H/2  + guided(skip1) → B,32, H/2
-        dec0: B,32, H/2  → upsample → B,32, H    + guided(skip0) → B,16, H
-        head: B,16,H → B,2,H  (logits)
+        dec3: B,GC[4],H/16 → upsample → B,GC[4],H/8  + guided(skip3) → B,GC[3],H/8
+        dec2: B,GC[3],H/8  → upsample → B,GC[3],H/4  + guided(skip2) → B,GC[2],H/4
+        dec1: B,GC[2],H/4  → upsample → B,GC[2],H/2  + guided(skip1) → B,GC[1],H/2
+        dec0: B,GC[1],H/2  → upsample → B,GC[1],H    + guided(skip0) → B,GC[0],H
+        head: B,GC[0],H → B,2,H  (logits)
+
+    References:
+        - Oktay et al. 2018: spatial attention at skip connections
+        - BAGAU-Net 2020: prior-guided WMH segmentation (population atlas,
+          learned attention; our approach differs — per-patient soft map,
+          no extra learnable parameters)
     """
 
     def __init__(self):
@@ -220,54 +227,54 @@ class GuidedUNet(nn.Module):
         # ── Encoder: conv blocks (no downsampling) ─────────────────────────
         # Skips are captured at the OUTPUT of each conv block,
         # BEFORE the downsampling step below.
-        self.conv0 = _ConvBlock(IN_CHANNELS,  CHANNELS[0], NUM_RES_UNITS)
-        self.conv1 = _ConvBlock(CHANNELS[0],  CHANNELS[1], NUM_RES_UNITS)
-        self.conv2 = _ConvBlock(CHANNELS[1],  CHANNELS[2], NUM_RES_UNITS)
-        self.conv3 = _ConvBlock(CHANNELS[2],  CHANNELS[3], NUM_RES_UNITS)
+        self.conv0 = _ConvBlock(IN_CHANNELS,           GUIDED_CHANNELS[0], NUM_RES_UNITS)
+        self.conv1 = _ConvBlock(GUIDED_CHANNELS[0],    GUIDED_CHANNELS[1], NUM_RES_UNITS)
+        self.conv2 = _ConvBlock(GUIDED_CHANNELS[1],    GUIDED_CHANNELS[2], NUM_RES_UNITS)
+        self.conv3 = _ConvBlock(GUIDED_CHANNELS[2],    GUIDED_CHANNELS[3], NUM_RES_UNITS)
 
         # ── Downsampling steps (strided conv, separate from skip) ──────────
         self.down0 = nn.Sequential(
-            nn.Conv3d(CHANNELS[0], CHANNELS[0], kernel_size=2,
+            nn.Conv3d(GUIDED_CHANNELS[0], GUIDED_CHANNELS[0], kernel_size=2,
                       stride=STRIDES[0], bias=False),
-            nn.BatchNorm3d(CHANNELS[0]),
+            nn.BatchNorm3d(GUIDED_CHANNELS[0]),
             nn.ReLU(inplace=True),
         )
         self.down1 = nn.Sequential(
-            nn.Conv3d(CHANNELS[1], CHANNELS[1], kernel_size=2,
+            nn.Conv3d(GUIDED_CHANNELS[1], GUIDED_CHANNELS[1], kernel_size=2,
                       stride=STRIDES[1], bias=False),
-            nn.BatchNorm3d(CHANNELS[1]),
+            nn.BatchNorm3d(GUIDED_CHANNELS[1]),
             nn.ReLU(inplace=True),
         )
         self.down2 = nn.Sequential(
-            nn.Conv3d(CHANNELS[2], CHANNELS[2], kernel_size=2,
+            nn.Conv3d(GUIDED_CHANNELS[2], GUIDED_CHANNELS[2], kernel_size=2,
                       stride=STRIDES[2], bias=False),
-            nn.BatchNorm3d(CHANNELS[2]),
+            nn.BatchNorm3d(GUIDED_CHANNELS[2]),
             nn.ReLU(inplace=True),
         )
         self.down3 = nn.Sequential(
-            nn.Conv3d(CHANNELS[3], CHANNELS[3], kernel_size=2,
+            nn.Conv3d(GUIDED_CHANNELS[3], GUIDED_CHANNELS[3], kernel_size=2,
                       stride=STRIDES[3], bias=False),
-            nn.BatchNorm3d(CHANNELS[3]),
+            nn.BatchNorm3d(GUIDED_CHANNELS[3]),
             nn.ReLU(inplace=True),
         )
 
         # ── Bottleneck (at lowest resolution, no skip) ─────────────────────
-        self.bottleneck = _ConvBlock(CHANNELS[3], CHANNELS[4], NUM_RES_UNITS)
+        self.bottleneck = _ConvBlock(GUIDED_CHANNELS[3], GUIDED_CHANNELS[4], NUM_RES_UNITS)
 
         # ── Decoder ────────────────────────────────────────────────────────
         # Each block upsamples from the previous decoder output, then concats
         # the guided skip from the corresponding encoder level.
-        self.dec3 = _DecoderBlock(CHANNELS[4], CHANNELS[3],
-                                   CHANNELS[3], NUM_RES_UNITS)
-        self.dec2 = _DecoderBlock(CHANNELS[3], CHANNELS[2],
-                                   CHANNELS[2], NUM_RES_UNITS)
-        self.dec1 = _DecoderBlock(CHANNELS[2], CHANNELS[1],
-                                   CHANNELS[1], NUM_RES_UNITS)
-        self.dec0 = _DecoderBlock(CHANNELS[1], CHANNELS[0],
-                                   CHANNELS[0], NUM_RES_UNITS)
+        self.dec3 = _DecoderBlock(GUIDED_CHANNELS[4], GUIDED_CHANNELS[3],
+                                   GUIDED_CHANNELS[3], NUM_RES_UNITS)
+        self.dec2 = _DecoderBlock(GUIDED_CHANNELS[3], GUIDED_CHANNELS[2],
+                                   GUIDED_CHANNELS[2], NUM_RES_UNITS)
+        self.dec1 = _DecoderBlock(GUIDED_CHANNELS[2], GUIDED_CHANNELS[1],
+                                   GUIDED_CHANNELS[1], NUM_RES_UNITS)
+        self.dec0 = _DecoderBlock(GUIDED_CHANNELS[1], GUIDED_CHANNELS[0],
+                                   GUIDED_CHANNELS[0], NUM_RES_UNITS)
 
         # ── Final classification head ──────────────────────────────────────
-        self.head = nn.Conv3d(CHANNELS[0], OUT_CHANNELS, kernel_size=1)
+        self.head = nn.Conv3d(GUIDED_CHANNELS[0], OUT_CHANNELS, kernel_size=1)
 
     def _guide(self, skip: torch.Tensor,
                soft_map: torch.Tensor) -> torch.Tensor:
@@ -277,6 +284,11 @@ class GuidedUNet(nn.Module):
         The soft map is a scalar per-voxel confidence that the classical
         pipeline considers that voxel a WMH candidate. Broadcasting across
         the channel dim reweights all feature channels equally.
+
+        Using (1 + sm) instead of sm directly ensures background regions
+        (sm ≈ 0) pass through unchanged (×1) while WMH candidates (sm ≈ 1)
+        get a 2× boost. This prevents the guidance from zeroing out
+        spatial context in low-confidence regions.
 
         Args:
             skip     (B, C, H', W', D') — encoder features at this level
@@ -302,29 +314,28 @@ class GuidedUNet(nn.Module):
             logits (B, 2, H, W, D)
         """
         # ── Encoder: conv → skip → downsample ─────────────────────────────
-        s0 = self.conv0(x)          # (B, 16, H,    W,    D   )
-        x  = self.down0(s0)         # (B, 16, H/2,  W/2,  D/2 )
+        s0 = self.conv0(x)          # (B, GC[0], H,    W,    D   )
+        x  = self.down0(s0)         # (B, GC[0], H/2,  W/2,  D/2 )
 
-        s1 = self.conv1(x)          # (B, 32, H/2,  W/2,  D/2 )
-        x  = self.down1(s1)         # (B, 32, H/4,  W/4,  D/4 )
+        s1 = self.conv1(x)          # (B, GC[1], H/2,  W/2,  D/2 )
+        x  = self.down1(s1)         # (B, GC[1], H/4,  W/4,  D/4 )
 
-        s2 = self.conv2(x)          # (B, 64, H/4,  W/4,  D/4 )
-        x  = self.down2(s2)         # (B, 64, H/8,  W/8,  D/8 )
+        s2 = self.conv2(x)          # (B, GC[2], H/4,  W/4,  D/4 )
+        x  = self.down2(s2)         # (B, GC[2], H/8,  W/8,  D/8 )
 
-        s3 = self.conv3(x)          # (B, 128,H/8,  W/8,  D/8 )
-        x  = self.down3(s3)         # (B, 128,H/16, W/16, D/16)
+        s3 = self.conv3(x)          # (B, GC[3], H/8,  W/8,  D/8 )
+        x  = self.down3(s3)         # (B, GC[3], H/16, W/16, D/16)
 
         # ── Bottleneck ────────────────────────────────────────────────────
-        x = self.bottleneck(x)      # (B, 256,H/16, W/16, D/16)
+        x = self.bottleneck(x)      # (B, GC[4], H/16, W/16, D/16)
 
         # ── Decoder: upsample → concat guided skip → conv ─────────────────
-        x = self.dec3(x, self._guide(s3, soft_map))  # (B, 128,H/8,  W/8,  D/8 )
-        x = self.dec2(x, self._guide(s2, soft_map))  # (B, 64, H/4,  W/4,  D/4 )
-        x = self.dec1(x, self._guide(s1, soft_map))  # (B, 32, H/2,  W/2,  D/2 )
-        x = self.dec0(x, self._guide(s0, soft_map))  # (B, 16, H,    W,    D   )
+        x = self.dec3(x, self._guide(s3, soft_map))  # (B, GC[3], H/8,  W/8,  D/8 )
+        x = self.dec2(x, self._guide(s2, soft_map))  # (B, GC[2], H/4,  W/4,  D/4 )
+        x = self.dec1(x, self._guide(s1, soft_map))  # (B, GC[1], H/2,  W/2,  D/2 )
+        x = self.dec0(x, self._guide(s0, soft_map))  # (B, GC[0], H,    W,    D   )
 
-        return self.head(x)                           # (B, 2,  H,    W,    D   )
-
+        return self.head(x)                           # (B, 2,     H,    W,    D   )
 
 # ── Factory functions ─────────────────────────────────────────────────────────
 
