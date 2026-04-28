@@ -18,7 +18,7 @@ Usage:
 
 Key design choices (matched to HW5 + WMH literature):
     Loss:      DiceLoss(to_onehot_y=True, softmax=True)  — HW5 default
-    Optimizer: Adam, lr=1e-4                              — HW5 default
+    Optimizer: Adam, lr=5e-5                              — HW5 default
     Scheduler: ReduceLROnPlateau (patience=20)            — WMH literature
     Val:       sliding_window_inference every val_interval epochs — HW5 pattern
     Metric:    MONAI DiceMetric (background excluded)     — HW5 default
@@ -40,7 +40,7 @@ import torch.nn.functional as F
 import numpy as np
 from tqdm import tqdm
 
-from monai.losses import DiceLoss
+from monai.losses import DiceCELoss
 from monai.metrics import DiceMetric
 from monai.transforms import AsDiscrete, Compose, EnsureType
 from monai.data import decollate_batch
@@ -82,7 +82,7 @@ def parse_args():
         help='Number of training epochs (default: 300)'
     )
     p.add_argument(
-        '--lr', type=float, default=1e-4,
+        '--lr', type=float, default=5e-5,
         help='Initial learning rate (default: 1e-4, matched to HW5)'
     )
     p.add_argument(
@@ -216,11 +216,11 @@ def train(args):
 
     # ── Loss, optimizer, scheduler ─────────────────────────────────────────────
     # DiceLoss with softmax + one-hot — matched to HW5 exactly
-    loss_fn   = DiceLoss(to_onehot_y=True, softmax=True)
+    loss_fn = DiceCELoss(to_onehot_y=True, softmax=True, lambda_dice=0.5, lambda_ce=0.5)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
     # Reduce LR when val DICE plateaus — standard for WMH segmentation
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='max', factor=0.5, patience=20,
+        optimizer, mode='max', factor=0.5, patience=10,
     )
 
     # ── Validation utilities (matched to HW5) ──────────────────────────────────
