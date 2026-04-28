@@ -16,7 +16,7 @@ Guided improves over baseline by +3.6% train DICE and +5.5% test DICE.
 
 ## Quick Start
 
-For the TA of 16-725A, please follow these instructions to run the trained Guided U-Net on the included test set and see the evaluation metrics. 
+For the TA of 16-725A, please follow these instructions to run the trained Guided U-Net on the test set included in the submission zip and to see the evaluation metrics. 
 
 1. Install dependencies ([Setup](#setup))
 2. Run from the repo root:
@@ -78,7 +78,7 @@ pip install "monai[all]" SimpleITK nibabel scikit-image scikit-learn matplotlib 
 
 ## Data
 
-Download the WMH 2017 Challenge dataset from Kaggle → see [`data/download_instructions.md`](data/download_instructions.md) for exact steps.
+Download the full WMH 2017 Challenge dataset from Kaggle → see [`data/download_instructions.md`](data/download_instructions.md) for exact steps.
 
 ---
 
