@@ -201,3 +201,18 @@ Each preprocessed case contains:
 | `wmh.nii` | Binary ground truth mask |
 | `soft_map.nii` | Classical soft probability map [0, 1] |
 | `classical_seg.nii` | Classical segmentation output |
+
+---
+
+## Acknowledgements
+
+**References:**
+- Li, H. et al. (2018). Fully convolutional network ensembles for white matter hyperintensities segmentation in MR images. *NeuroImage*. (WMH Challenge 1st place — training configuration and augmentation strategy)
+- Kuijf, H. J. et al. (2019). Standardized assessment of automatic segmentation of white matter hyperintensities and results of the WMH segmentation challenge. *IEEE TMI*. (Dataset and cross-scanner augmentation guidance)
+- Oktay, O. et al. (2018). Attention U-Net: Learning where to look for the pancreas. *MIDL*. (Inspiration for spatial attention at skip connections)
+- Zhang, Y. et al. (2020). BAGAU-Net: Prior-guided U-Net for WMH segmentation. (Prior-guided WMH segmentation; however this project uses per-patient soft maps rather than a population atlas)
+- Schmidt, P. et al. (2012). An automated tool for detection of FLAIR-hyperintense white-matter lesions in Multiple Sclerosis. *NeuroImage*. (Classical WMH segmentation reference)
+- Griffanti, L. et al. (2016). BIANCA: Brain intensity abnormality classification algorithm. *NeuroImage*. (Classical WMH segmentation reference)
+
+**AI assistance:**
+Claude (Anthropic) was used to assist with code cleanup, repository structure, and documentation. The research question, model design, training decisions, and core implementation were still done by me.
