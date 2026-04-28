@@ -8,3 +8,4 @@ kaggle datasets download -d farahmo/wmh-dataset --unzip
 ```
 
 This should generate a wmh_data/ subdirectory with the training/ and test/ folders.
+The processed/ subdirectory will be created when running `preprocessing/preprocess_rawData.py`

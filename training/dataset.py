@@ -28,7 +28,7 @@ References for augmentation choices:
     - Li et al. 2018 (WMH challenge winner): mirroring, rotation, scaling
     - Kuijf et al. 2019 (WMH challenge paper): augmentation key to cross-scanner
       generalization
-    - MONAI HW5 notebook (from class): CacheDataset + RandCropByPosNegLabeld pattern
+    - MONAI HW5 notebook (from our class): CacheDataset + RandCropByPosNegLabeld pattern
 """
 
 import torch

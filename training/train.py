@@ -25,7 +25,7 @@ Key design choices (matched to HW5 + WMH literature):
     Patch:     batch already cropped by dataloader, no extra patching needed
 
 References:
-    - HW5 MONAI notebook (course) — training loop structure
+    - HW5 MONAI notebook (our class) — training loop structure
     - Li et al. 2018 (WMH challenge winner) — 300-600 epochs, Adam 1e-4
 """
 
