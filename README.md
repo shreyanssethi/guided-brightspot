@@ -4,10 +4,10 @@ Research Question: Does injecting a classical soft probability map into a 3D U-N
 
 Two models are compared on the [WMH 2017 Challenge](https://www.kaggle.com/datasets/farahmo/wmh-dataset) dataset (60 train / 110 test cases, 3/5 scanner sites):
 
-- **BaselineUNet** — standard MONAI 3D U-Net with FLAIR + T1 as input
-- **GuidedUNet** — same architecture, but each skip connection is scaled by a classical soft probability map: `skip_guided = skip × (1 + soft_map)`
+- **BaselineUNet** --> standard MONAI 3D U-Net with FLAIR + T1 as input
+- **GuidedUNet** (Ours) --> same architecture, but each skip connection is scaled by a classical soft probability map: `skip_guided = skip × (1 + soft_map)`
 
-The guidance adds zero learnable parameters — same model capacity, different inductive bias.
+The guidance adds zero learnable parameters (same model capacity, different inductive bias).
 
 ## Results
 
@@ -65,7 +65,7 @@ pip install "monai[all]" SimpleITK nibabel scikit-image scikit-learn matplotlib 
 
 ## Data
 
-Download the WMH 2017 Challenge dataset from Kaggle — see [`data/download_instructions.md`](data/download_instructions.md) for exact steps.
+Download the WMH 2017 Challenge dataset from Kaggle --> see [`data/download_instructions.md`](data/download_instructions.md) for exact steps.
 
 ---
 
@@ -124,8 +124,8 @@ python preprocessing/grid_search_soft_maps.py
 
 | Notebook | Purpose |
 |----------|---------|
-| `data_exploration.ipynb` | Inspect raw data — shape, spacing, intensity variation across sites |
-| `verify_processed.ipynb` | Confirm preprocessing — uniform shape/spacing, z-score norm, binary masks |
+| `data_exploration.ipynb` | Inspect raw data --> shape, spacing, intensity variation across sites |
+| `verify_processed.ipynb` | Confirm preprocessing --> uniform shape/spacing, z-score norm, binary masks |
 | `evaluate_classical_and_softmap.ipynb` | Classical baseline metrics + soft map health checks |
 | `plot_training_curves.ipynb` | Training loss, validation DICE, learning rate schedule |
 | `model_evaluation.ipynb` | Full comparison: classical vs baseline vs guided (DICE, HD95, per-site) |
@@ -157,7 +157,7 @@ outputs/
 
 ## Dataset
 
-**WMH 2017 Challenge** — 3D FLAIR + T1 brain MRI with manual WMH lesion masks.
+**WMH 2017 Challenge** --> 3D FLAIR + T1 brain MRI with manual WMH lesion masks.
 
 - **Training:** 60 cases across 3 sites (Utrecht, Singapore, Amsterdam/GE3T), stratified 80/20 train/val split
 - **Test:** 110 cases across 5 sites (includes 2 out-of-distribution scanners: GE1T5, Philips)
