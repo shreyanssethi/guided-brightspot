@@ -1,6 +1,6 @@
 # guided-brightspot
 
-White Matter Hyperintensities (WMH) are regions of abnormal signal in brain MRI associated with neurological disease, and accurately segmenting them from 3D FLAIR and T1 scans is a challenging task due to their variability in size, shape, and location across patients and scanner sites. This project investigates whether a classical image processing pipeline can be used not as a standalone segmentor, but as a source of spatial guidance for a deep learning model. My idea is to run a fast thresholding and morphology pipeline on a FLAIR/T1 difference map to produce a per-patient soft probability map of WMH candidates, then inject that map into a 3D U-Net at every skip connection via element-wise scaling (`skip_guided = skip × (1 + soft_map)`). This biases the decoder toward classically-flagged regions without adding any learnable parameters --> the two models being compared have identical capacity, just different inductive biases. The classical soft maps are computed using SimpleITK (intensity thresholding on the FLAIR–T1 difference, morphological cleaning, and Gaussian smoothing), and both models are trained end-to-end using MONAI's 3D U-Net with patch-based training on the [WMH 2017 Challenge](https://www.kaggle.com/datasets/farahmo/wmh-dataset) dataset (60 train / 110 test cases across 3/5 scanner sites).
+White Matter Hyperintensities (WMH) are regions of abnormal signal in brain MRI associated with neurological disease, and accurately segmenting them from 3D FLAIR and T1 scans is a challenging task due to their variability in size, shape, and location across patients and scanner sites. This project investigates whether a classical image processing pipeline can be used not as a standalone segmentor, but as a source of spatial guidance for a deep learning model. My idea is to run a fast thresholding and morphology pipeline on a FLAIR/T1 difference map to produce a per-patient soft probability map of WMH candidates, then inject that map into a 3D U-Net at every skip connection via element-wise scaling (`skip_guided = skip × (1 + soft_map)`). This biases the decoder toward classically-flagged regions without adding any learnable parameters → the two models being compared have identical capacity, just different inductive biases. The classical soft maps are computed using SimpleITK (intensity thresholding on the FLAIR–T1 difference, morphological cleaning, and Gaussian smoothing), and both models are trained end-to-end using MONAI's 3D U-Net with patch-based training on the [WMH 2017 Challenge](https://www.kaggle.com/datasets/farahmo/wmh-dataset) dataset (60 train / 110 test cases across 3/5 scanner sites).
 
 ## Results
 
@@ -78,7 +78,7 @@ pip install "monai[all]" SimpleITK nibabel scikit-image scikit-learn matplotlib 
 
 ## Data
 
-Download the WMH 2017 Challenge dataset from Kaggle --> see [`data/download_instructions.md`](data/download_instructions.md) for exact steps.
+Download the WMH 2017 Challenge dataset from Kaggle → see [`data/download_instructions.md`](data/download_instructions.md) for exact steps.
 
 ---
 
@@ -135,10 +135,12 @@ python preprocessing/grid_search_soft_maps.py
 
 ## Notebooks
 
+*Note: In the notebooks, you may have to change the paths (`DATA_ROOT`, `TEST_ROOT`, etc.) that are usually declared in the first few cells to match your absolute path.*
+
 | Notebook | Purpose |
 |----------|---------|
-| `data_exploration.ipynb` | Inspect raw data --> shape, spacing, intensity variation across sites |
-| `verify_processed.ipynb` | Confirm preprocessing --> uniform shape/spacing, z-score norm, binary masks |
+| `data_exploration.ipynb` | Inspect raw data → shape, spacing, intensity variation across sites |
+| `verify_processed.ipynb` | Confirm preprocessing → uniform shape/spacing, z-score norm, binary masks |
 | `evaluate_classical_and_softmap.ipynb` | Classical baseline metrics + soft map health checks |
 | `plot_training_curves.ipynb` | Training loss, validation DICE, learning rate schedule |
 | `model_evaluation.ipynb` | Full comparison: classical vs baseline vs guided (DICE, HD95, per-site) |
@@ -185,7 +187,7 @@ outputs/
 
 ## Dataset
 
-**WMH 2017 Challenge** --> 3D FLAIR + T1 brain MRI with manual WMH lesion masks.
+**WMH 2017 Challenge** → 3D FLAIR + T1 brain MRI with manual WMH lesion masks.
 
 - **Training:** 60 cases across 3 sites (Utrecht, Singapore, Amsterdam/GE3T), stratified 80/20 train/val split
 - **Test:** 110 cases across 5 sites (includes 2 out-of-distribution scanners: GE1T5, Philips)

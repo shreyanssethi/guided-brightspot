@@ -50,7 +50,7 @@ from monai.data import CacheDataset, DataLoader
 
 # ── Config ─────────────────────────────────────────────────────────────────────
 
-PROCESSED_ROOT = Path('/data/users/ssethi2/mmml_repos/guided-brightspot/data/processed/training')
+PROCESSED_ROOT = Path(__file__).resolve().parent.parent / 'data' / 'processed' / 'training'
 
 SITES = ['Utrecht', 'Singapore', 'Amsterdam/GE3T']
 

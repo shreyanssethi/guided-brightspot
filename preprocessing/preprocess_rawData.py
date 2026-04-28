@@ -26,9 +26,10 @@ from pathlib import Path
 TARGET_SPACING = (1.0, 1.0, 3.0)   # x, y, z in mm
 TARGET_SIZE    = (200, 200, 48)     # x, y, z in voxels
 
-# Data layout (TODO: Change to match your setup)
-DATA_ROOT = Path('/data/users/ssethi2/mmml_repos/guided-brightspot/data/wmh_data')
-OUT_ROOT  = Path('/data/users/ssethi2/mmml_repos/guided-brightspot/data/processed')
+# Data layout — paths are resolved relative to this file's location
+REPO_ROOT = Path(__file__).resolve().parent.parent
+DATA_ROOT = REPO_ROOT / 'data' / 'wmh_data'
+OUT_ROOT  = REPO_ROOT / 'data' / 'processed'
 
 # Sites per split — Amsterdam has subdirs so we have to list full relative paths
 SITES = {

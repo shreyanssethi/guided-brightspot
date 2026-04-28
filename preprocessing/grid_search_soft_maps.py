@@ -12,7 +12,7 @@ from tqdm import tqdm
 
 # ── Paths / repo setup ────────────────────────────────────────────────────────
 
-REPO_ROOT = Path('/data/users/ssethi2/mmml_repos/guided-brightspot')
+REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
 from evaluation.metrics import evaluate_case

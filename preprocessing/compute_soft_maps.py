@@ -114,7 +114,8 @@ GAUSSIAN_SIGMA = 1.0
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 
-PROCESSED_ROOT = Path('/data/users/ssethi2/mmml_repos/guided-brightspot/data/processed')
+REPO_ROOT      = Path(__file__).resolve().parent.parent
+PROCESSED_ROOT = REPO_ROOT / 'data' / 'processed'
 
 SITES = {
     'training': ['Utrecht', 'Singapore', 'Amsterdam/GE3T'],
