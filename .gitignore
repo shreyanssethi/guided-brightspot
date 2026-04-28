@@ -5,3 +5,4 @@ __pycache__/
 .vscode/
 outputs/checkpoints
 outputs/logs
+data/project_submission/test/
